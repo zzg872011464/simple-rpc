@@ -1,0 +1,2 @@
+JDK=serializer.JdkSerializer
+JSON=serializer.FastJsonSerializer
