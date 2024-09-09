@@ -5,7 +5,9 @@ import cn.hutool.http.HttpResponse;
 import com.alibaba.nacos.api.naming.pojo.Instance;
 import config.RegistryConfig;
 import config.RpcConfig;
-import filter.request.before.BeforeRequestFilterManager;
+import filter.request.RequestFilterChain;
+import invoke.Invocation;
+import invoke.Invoker;
 import pojo.RpcRequest;
 import pojo.RpcResponse;
 import registry.center.RegistryManage;
@@ -21,28 +23,35 @@ public class RpcJdkProxy implements InvocationHandler {
 
     @Override
     public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
-        Serializer serializer = SerializeFactory.getSerializer(RpcConfig.getInstance().getSerializer());
-        RpcRequest rpcRequest = RpcRequest.builder()
-                .serverName(method.getDeclaringClass().getName())
-                .method(method.getName())
-                .parameterTypes(method.getParameterTypes())
-                .args(args)
-                .build();
+        Invocation invocation = new Invocation(method, args);
+        Invoker realInvoker = new RealInvoker();
+        RequestFilterChain requestFilterChain = new RequestFilterChain();
+        return requestFilterChain.invoke(realInvoker, invocation);
+    }
 
-        BeforeRequestFilterManager.doFilter(rpcRequest);
+    private class RealInvoker implements Invoker {
+        @Override
+        public Object invoke(Invocation invocation) throws Throwable {
+            Serializer serializer = SerializeFactory.getSerializer(RpcConfig.getInstance().getSerializer());
+            RpcRequest rpcRequest = RpcRequest.builder()
+                    .serverName(invocation.method().getDeclaringClass().getName())
+                    .method(invocation.method().getName())
+                    .parameterTypes(invocation.method().getParameterTypes())
+                    .args(invocation.args())
+                    .build();
 
-        byte[] serialized = serializer.serialize(rpcRequest);
-        try (HttpResponse httpResponse = HttpRequest.post(getServerUrl(method.getDeclaringClass().getName()))
-                .body(serialized)
-                .execute()) {
-            byte[] bytes = httpResponse.bodyBytes();
+            byte[] serialized = serializer.serialize(rpcRequest);
+            try (HttpResponse httpResponse = HttpRequest.post(getServerUrl(invocation.method().getDeclaringClass().getName()))
+                    .body(serialized)
+                    .execute()) {
+                byte[] bytes = httpResponse.bodyBytes();
+                RpcResponse rpcResponse = serializer.deserialize(bytes, RpcResponse.class);
 
-            RpcResponse rpcResponse = serializer.deserialize(bytes, RpcResponse.class);
-
-            if (rpcResponse.getException() != null) {
-                throw rpcResponse.getException();
+                if (rpcResponse.getException() != null) {
+                    throw rpcResponse.getException();
+                }
+                return rpcResponse.getResult();
             }
-            return rpcResponse.getResult();
         }
     }
 
